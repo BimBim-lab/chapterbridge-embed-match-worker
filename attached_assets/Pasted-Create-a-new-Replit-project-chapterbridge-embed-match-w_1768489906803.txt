@@ -1,0 +1,223 @@
+Create a new Replit project: "chapterbridge-embed-match-worker" using Node.js + TypeScript.
+
+GOAL:
+I already have workers for scraping, OCR, and NLP. NLP outputs are stored in Supabase.
+Now I need a separate worker for:
+1) EMBEDDING (3 embeddings per segment)
+2) MATCHING (fromEdition -> toEdition) with monotonic alignment option
+3) DERIVE cross-media mappings (e.g., anime -> manhwa) by pivoting through a shared novel edition
+
+DATABASE (Supabase Postgres):
+Tables used:
+- segments(id uuid, edition_id uuid, number int, ...)
+- segment_summaries(segment_id uuid, summary_short text, summary text, events jsonb, ...)
+- segment_entities(segment_id uuid, time_context text, characters jsonb, locations jsonb, keywords jsonb, ...)
+- segment_embeddings(segment_id uuid unique,
+    embedding_summary vector(1536),
+    embedding_events vector(1536),
+    embedding_entities vector(1536),
+    embed_model text, embed_dim int, ...)
+- segment_mappings(
+    from_segment_id uuid,
+    to_edition_id uuid,
+    to_segment_start int,
+    to_segment_end int,
+    confidence real,
+    evidence jsonb,
+    status text,
+    algorithm_version text,
+    ...)
+
+ENV (.env):
+- SUPABASE_URL=
+- SUPABASE_SERVICE_KEY=
+- SUPABASE_DB_URL=   (Postgres connection string)
+- OPENAI_API_KEY=
+- EMBED_MODEL=text-embedding-3-small
+- EMBED_DIM=1536
+- BATCH_SIZE=50
+- TOP_K=20
+- ALGO_VERSION=emb-v1
+- WINDOW=80
+- BACKTRACK=3
+
+DEPENDENCIES:
+- typescript, tsx (or ts-node), dotenv
+- @supabase/supabase-js
+- openai
+- pg (node-postgres)  <-- required for direct pgvector similarity queries
+
+PROJECT STRUCTURE:
+src/
+  cli.ts
+  config.ts
+  supabase.ts
+  db.ts
+  openai.ts
+  embed.ts
+  match.ts
+  align.ts
+  derive.ts
+  text.ts
+  score.ts
+README.md
+
+===== CLI COMMANDS =====
+1) Embedding:
+  npm run embed -- --editionId=<uuid> --limit=5000
+
+2) Matching (independent per segment, for debugging):
+  npm run match -- --fromEditionId=<uuid> --toEditionId=<uuid> --limit=2000
+
+3) Matching with monotonic alignment (recommended for production):
+  npm run match-align -- --fromEditionId=<uuid> --toEditionId=<uuid> --window=80 --backtrack=3 --limit=999999
+
+4) Derive cross-media mapping via novel pivot:
+  npm run derive -- --fromEditionId=<animeEditionId> --toEditionId=<manhwaEditionId> --pivotEditionId=<novelEditionId> --limit=999999
+
+====================================================
+MODE 1: EMBED (embed.ts)
+====================================================
+Fetch segments that do NOT yet have a row in segment_embeddings (LEFT JOIN segment_embeddings).
+Join segment_summaries and segment_entities.
+
+Build 3 embedding texts:
+
+A) SUMMARY TEXT -> embedding_summary
+  summary_text = `${summary_short}\n${summary}`
+
+B) EVENTS TEXT -> embedding_events
+  events may be array of objects {idx, text} or strings.
+  events_text = numbered lines:
+    `1) ...\n2) ...\n3) ...`
+
+C) ENTITIES TEXT -> embedding_entities
+  Extract names from segment_entities.characters/locations/keywords.
+  If objects, use field "name". If strings, use the string.
+  Deduplicate, cap max 50 total tokens/items.
+  Format:
+    `CHARS: a, b, c\nLOCS: x, y\nKEY: k1, k2`
+
+Call OpenAI Embeddings API using EMBED_MODEL for each text.
+Upsert into segment_embeddings:
+  { segment_id, embedding_summary, embedding_events, embedding_entities, embed_model, embed_dim }
+
+Batching: BATCH_SIZE, retry exponential backoff, log progress.
+
+====================================================
+MODE 2: MATCH (match.ts)
+====================================================
+Independent matching per segment.
+
+WEIGHTS:
+- sim_summary_combo = 0.6 * sim(summary) + 0.4 * sim(events)
+- final_score = 0.8 * sim_summary_combo + 0.2 * sim(entities)
+- time_context adjustment:
+  - exact match: +0.02
+  - clear mismatch (present vs past/future): -0.03
+  - unknown/mixed: 0
+
+For each fromSegment:
+1) Retrieve candidates from toEditionId using pgvector:
+   - Top-K by embedding_summary
+   - Top-K by embedding_events
+   - Top-K by embedding_entities
+   Union candidates (unique segment_id).
+2) Fetch candidate details (segment number, time_context, entities arrays).
+3) Compute final_score.
+4) Pick top1. For range mapping:
+   - include candidates within 0.02 of top1 final_score
+   - range = min(number) .. max(number)
+5) Upsert segment_mappings (unique by from_segment_id + to_edition_id):
+   to_segment_start, to_segment_end, confidence=final_score, status="proposed",
+   algorithm_version=ALGO_VERSION,
+   evidence JSON:
+   {
+     "scores": {"sim_sum":..., "sim_evt":..., "sim_ent":..., "final":...},
+     "time_context": {"from":"...", "to":"..."},
+     "overlap": {"characters":[...], "locations":[...], "keywords":[...]},
+     "top_candidates":[{"segment_id":"...", "number":..., "final":...}, ...]
+   }
+
+VECTOR QUERY EXAMPLE (cosine distance):
+SELECT se.segment_id, s.number, 1 - (se.embedding_summary <=> $1) AS sim
+FROM segment_embeddings se
+JOIN segments s ON s.id = se.segment_id
+WHERE s.edition_id = $2 AND se.embedding_summary IS NOT NULL
+ORDER BY se.embedding_summary <=> $1
+LIMIT $3;
+
+====================================================
+MODE 3: MATCH-ALIGN (align.ts)  [RECOMMENDED]
+====================================================
+Monotonic alignment so that as fromSegment.number increases, chosen toSegment.number generally increases.
+
+Algorithm (windowed monotonic):
+- Process fromSegments in ascending order of segments.number.
+- Maintain lastBestToNumber (null initially).
+- For each fromSegment:
+  - If lastBestToNumber is not null:
+    restrict candidate search to toNumber in [lastBestToNumber - BACKTRACK, lastBestToNumber + WINDOW]
+    (Implement by adding `AND s.number BETWEEN $min AND $max` in candidate SQL queries.)
+  - Compute final_score as in MODE 2
+  - Pick best candidate and update lastBestToNumber = best.toNumber (or midpoint of range)
+  - Upsert segment_mappings same as MODE 2, but algorithm_version = `${ALGO_VERSION}-align`
+
+Optional:
+- Add small penalty if candidate.toNumber < lastBestToNumber and outside BACKTRACK.
+
+====================================================
+MODE 4: DERIVE CROSS-MEDIA MAPPING (derive.ts)
+====================================================
+Goal: derive anime -> manhwa (or anime -> manga) using novel as a pivot edition.
+
+Inputs:
+- fromEditionId (anime)
+- toEditionId (manhwa)
+- pivotEditionId (novel)
+
+We assume we already have two mapping sets stored in segment_mappings:
+A) anime segments -> pivot novel edition (to_edition_id = pivotEditionId)
+B) manhwa segments -> pivot novel edition (to_edition_id = pivotEditionId)
+
+Derivation logic:
+For each fromSegment in fromEditionId:
+1) Get its pivot range: [a_start, a_end] and conf_a
+2) Find all toSegments (manhwa) that have pivot ranges [m_start, m_end] and conf_m such that ranges overlap:
+   overlap_len = max(0, min(a_end, m_end) - max(a_start, m_start) + 1)
+3) Compute overlap_ratio = overlap_len / min(lenA, lenM)
+4) derived_conf = conf_a * conf_m * overlap_ratio
+5) Choose best candidates:
+   - either top1 toSegment, or build range if multiple top candidates are close and consecutive
+6) Upsert into segment_mappings using:
+   - from_segment_id = anime segment_id
+   - to_edition_id = manhwa editionId (toEditionId)
+   - to_segment_start/to_segment_end from chosen manhwa segments
+   - confidence = derived_conf (clamp 0..1)
+   - status = "proposed"
+   - algorithm_version = "derived-v1"
+   - evidence JSON includes pivot overlaps:
+     {
+       "pivot_edition_id": "...",
+       "anime_to_pivot": {"start":..., "end":..., "confidence":...},
+       "best_manhwa_to_pivot": [{"manhwa_segment_id":"...", "range":[...], "confidence":...}],
+       "overlap": {"len":..., "ratio":...},
+       "derived_conf": ...
+     }
+
+====================================================
+DELIVERABLES:
+- Full TypeScript implementation of embed, match, match-align, derive.
+- package.json scripts:
+  "dev": "tsx src/cli.ts",
+  "embed": "tsx src/cli.ts embed",
+  "match": "tsx src/cli.ts match",
+  "match-align": "tsx src/cli.ts match-align",
+  "derive": "tsx src/cli.ts derive",
+  "build": "tsc"
+- README explaining setup and running each command.
+
+IMPORTANT:
+- No hard-coded secrets.
+- Robust retries and logging.
+- Modular and maintainable code.
