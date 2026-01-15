@@ -1,0 +1,27 @@
+{
+  "name": "chapterbridge-embed-match-worker",
+  "version": "1.0.0",
+  "description": "Worker for embedding generation, segment matching, and cross-media derivation",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/cli.ts",
+    "embed": "tsx src/cli.ts embed",
+    "match": "tsx src/cli.ts match",
+    "match-align": "tsx src/cli.ts match-align",
+    "derive": "tsx src/cli.ts derive",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.90.1",
+    "dotenv": "^16.6.1",
+    "openai": "^4.104.0",
+    "pg": "^8.17.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.29",
+    "@types/pg": "^8.16.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}
