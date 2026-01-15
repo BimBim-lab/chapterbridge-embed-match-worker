@@ -181,13 +181,13 @@ async function fetchCandidates(
     const sql = `
       SELECT 
         se.segment_id, s.number,
-        1 - (se.embedding_summary <=> $1) AS sim,
+        1 - (se.embedding_summary <=> $1::vector) AS sim,
         ent.time_context, ent.characters, ent.locations, ent.keywords
       FROM segment_embeddings se
       JOIN segments s ON s.id = se.segment_id
       JOIN segment_entities ent ON ent.segment_id = s.id
       WHERE s.edition_id = $2 AND se.embedding_summary IS NOT NULL ${rangeClause}
-      ORDER BY se.embedding_summary <=> $1
+      ORDER BY se.embedding_summary <=> $1::vector
       LIMIT $3
     `;
     const rows = await query<any>(sql, [
@@ -218,13 +218,13 @@ async function fetchCandidates(
     const sql = `
       SELECT 
         se.segment_id, s.number,
-        1 - (se.embedding_events <=> $1) AS sim,
+        1 - (se.embedding_events <=> $1::vector) AS sim,
         ent.time_context, ent.characters, ent.locations, ent.keywords
       FROM segment_embeddings se
       JOIN segments s ON s.id = se.segment_id
       JOIN segment_entities ent ON ent.segment_id = s.id
       WHERE s.edition_id = $2 AND se.embedding_events IS NOT NULL ${rangeClause}
-      ORDER BY se.embedding_events <=> $1
+      ORDER BY se.embedding_events <=> $1::vector
       LIMIT $3
     `;
     const rows = await query<any>(sql, [
@@ -255,13 +255,13 @@ async function fetchCandidates(
     const sql = `
       SELECT 
         se.segment_id, s.number,
-        1 - (se.embedding_entities <=> $1) AS sim,
+        1 - (se.embedding_entities <=> $1::vector) AS sim,
         ent.time_context, ent.characters, ent.locations, ent.keywords
       FROM segment_embeddings se
       JOIN segments s ON s.id = se.segment_id
       JOIN segment_entities ent ON ent.segment_id = s.id
       WHERE s.edition_id = $2 AND se.embedding_entities IS NOT NULL ${rangeClause}
-      ORDER BY se.embedding_entities <=> $1
+      ORDER BY se.embedding_entities <=> $1::vector
       LIMIT $3
     `;
     const rows = await query<any>(sql, [

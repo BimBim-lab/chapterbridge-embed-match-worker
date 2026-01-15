@@ -89,7 +89,7 @@ async function embedSegment(segment: SegmentToEmbed): Promise<void> {
       segment_id, embedding_summary, embedding_events, embedding_entities,
       embed_model, embed_dim
     )
-    VALUES ($1, $2, $3, $4, $5, $6)
+    VALUES ($1, $2::vector, $3::vector, $4::vector, $5, $6)
     ON CONFLICT (segment_id) DO UPDATE SET
       embedding_summary = EXCLUDED.embedding_summary,
       embedding_events = EXCLUDED.embedding_events,
