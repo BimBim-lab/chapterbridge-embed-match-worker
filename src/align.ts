@@ -229,8 +229,11 @@ async function fetchCandidates(
       ORDER BY se.embedding_summary <=> $1::vector
       LIMIT $3
     `;
+    const embeddingStr = Array.isArray(fromSeg.embedding_summary) 
+      ? `[${fromSeg.embedding_summary.join(',')}]`
+      : fromSeg.embedding_summary;
     const rows = await query<any>(sql, [
-      `[${fromSeg.embedding_summary.join(',')}]`,
+      embeddingStr,
       toEditionId,
       config.topK,
     ]);
@@ -266,8 +269,11 @@ async function fetchCandidates(
       ORDER BY se.embedding_events <=> $1::vector
       LIMIT $3
     `;
+    const eventsStr = Array.isArray(fromSeg.embedding_events) 
+      ? `[${fromSeg.embedding_events.join(',')}]`
+      : fromSeg.embedding_events;
     const rows = await query<any>(sql, [
-      `[${fromSeg.embedding_events.join(',')}]`,
+      eventsStr,
       toEditionId,
       config.topK,
     ]);
@@ -303,8 +309,11 @@ async function fetchCandidates(
       ORDER BY se.embedding_entities <=> $1::vector
       LIMIT $3
     `;
+    const entitiesStr = Array.isArray(fromSeg.embedding_entities) 
+      ? `[${fromSeg.embedding_entities.join(',')}]`
+      : fromSeg.embedding_entities;
     const rows = await query<any>(sql, [
-      `[${fromSeg.embedding_entities.join(',')}]`,
+      entitiesStr,
       toEditionId,
       config.topK,
     ]);
