@@ -1,0 +1,49 @@
+You are a TypeScript/Node developer working on the `chapterbridge-embed-match-worker` project. We have decided to implement per-event embeddings (Option A) instead of a single events embedding. The current schema includes `segment_summaries`, `segment_entities`, `segment_embeddings` and `segment_mappings`, with vector columns `embedding_summary`, `embedding_events`, `embedding_entities`:contentReference[oaicite:0]{index=0}. Now we will:
+
+1. **Add a new table `segment_event_embeddings`:**
+   - Columns:
+     - `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`
+     - `segment_id UUID NOT NULL REFERENCES segments(id) ON DELETE CASCADE`
+     - `edition_id UUID NOT NULL REFERENCES editions(id) ON DELETE CASCADE`
+     - `segment_number INTEGER NOT NULL`  -- copy from segments.number for fast windowed queries
+     - `event_idx INTEGER NOT NULL`       -- index of the event in its segment (0-based)
+     - `event_text TEXT NOT NULL`
+     - `embedding VECTOR(1536)`           -- default dimension for text-embedding-3 models
+     - `embed_model TEXT NOT NULL DEFAULT 'text-embedding-3-small'`
+     - `embed_dim INTEGER NOT NULL DEFAULT 1536`
+     - `created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`
+     - `updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`
+   - Constraints and indexes:
+     - Unique constraint on `(segment_id, event_idx)`
+     - Index on `(edition_id, segment_number)` for windowed monotonic matching
+     - `ivfflat` index on `embedding` for cosine similarity (e.g., `CREATE INDEX idx_evt_emb_ivfflat ON segment_event_embeddings USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);`)
+     - Trigger to auto-update `updated_at`
+
+2. **Keep existing table `segment_embeddings` unchanged** for summary and entities embeddings, but stop relying on `embedding_events` for matching.
+
+3. **Update the code:**
+   - Create a new module `src/eventEmbed.ts` that:
+     - Reads segments lacking event embeddings (LEFT JOIN segment_event_embeddings).
+     - Parses the `events` array from `segment_summaries` (pick up to 8 events per segment).
+     - Calls OpenAI embeddings API with the configured `EMBED_MODEL` for each event (use batch requests).
+     - Inserts or upserts each event embedding into `segment_event_embeddings`.
+   - Expose a CLI command `embed-events` in `src/cli.ts` so it can be run via `npm run embed-events -- --editionId=<uuid> --limit=5000`.
+   - Update `.env` reading to include `EMBED_MODEL` and `EMBED_DIM` if not already present.
+   - Reuse existing `openai.ts` helpers for creating embeddings; ensure event texts are trimmed and deduplicated.
+   - Ensure batching and retry logic similar to existing embedding.
+
+4. **Add a new matching mode** leveraging event voting:
+   - In `src/eventMatch.ts` implement `runMatchEvents` with arguments `fromEditionId`, `toEditionId`, `window`, `backtrack`, etc.
+   - For each `from` segment:
+     1. Fetch all its event embeddings from `segment_event_embeddings`.
+     2. For each embedding, perform vector search in `segment_event_embeddings` of the target edition (optionally within a number window based on last matched chapter) using pgvector cosine distance.
+     3. Accumulate similarity scores per target segment (`segment_number`) and normalise by event count.
+     4. Choose the best target chapter or range (chapters with cumulative scores within 0.02 of top).
+     5. Save mapping into `segment_mappings` with `confidence` equal to normalised cumulative score and `algorithm_version` e.g. `event-v1`.
+   - Add CLI command `match-events` or extend `match-align` with an option `--use-event-voting`. Use the existing scoring logic for summary/entities only if event voting isn’t used.
+
+5. **Update README** to document:
+   - Purpose of `segment_event_embeddings` and how to run `embed-events` and `match-events`.
+   - Explanation of event voting algorithm and when to use it instead of summary/events-only matching.
+
+Please implement these changes in a single PR. Make sure the migration SQL is idempotent (using `CREATE TABLE IF NOT EXISTS` and `ADD COLUMN IF NOT EXISTS`) and includes index creation. Adjust all imports/exports accordingly and update type definitions (e.g., add `SegmentEventEmbedding` interface). Ensure no secrets are hard-coded; use environment variables. Test with sample data to verify that event embeddings are created and that matching returns reasonable ranges.

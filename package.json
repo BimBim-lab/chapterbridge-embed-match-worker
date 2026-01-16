@@ -6,8 +6,10 @@
   "scripts": {
     "dev": "tsx src/cli.ts",
     "embed": "tsx src/cli.ts embed",
+    "embed-events": "tsx src/cli.ts embed-events",
     "match": "tsx src/cli.ts match",
     "match-align": "tsx src/cli.ts match-align",
+    "match-events": "tsx src/cli.ts match-events",
     "derive": "tsx src/cli.ts derive",
     "build": "tsc",
     "typecheck": "tsc --noEmit"

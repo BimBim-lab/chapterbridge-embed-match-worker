@@ -8,24 +8,30 @@ A Node.js + TypeScript CLI worker for the ChapterBridge pipeline. Handles embedd
 
 ```
 src/
-  cli.ts      - CLI entry point with command routing
-  config.ts   - Environment configuration loader
-  supabase.ts - Supabase client wrapper
-  db.ts       - PostgreSQL connection pool (for pgvector queries)
-  openai.ts   - OpenAI embedding API with retry logic
-  text.ts     - Text building utilities for embeddings
-  score.ts    - Scoring, overlap, and time context functions
-  embed.ts    - Embedding generation (3 per segment)
-  match.ts    - Independent segment matching
-  align.ts    - Monotonic alignment matching
-  derive.ts   - Cross-media derivation via pivot
+  cli.ts        - CLI entry point with command routing
+  config.ts     - Environment configuration loader
+  supabase.ts   - Supabase client wrapper
+  db.ts         - PostgreSQL connection pool (for pgvector queries)
+  openai.ts     - OpenAI embedding API with retry logic
+  text.ts       - Text building utilities for embeddings
+  score.ts      - Scoring, overlap, and time context functions
+  embed.ts      - Summary/entities embedding generation
+  eventEmbed.ts - Per-event embedding generation
+  match.ts      - Independent segment matching
+  align.ts      - Monotonic alignment matching
+  eventMatch.ts - Event voting matching
+  derive.ts     - Cross-media derivation via pivot
+migrations/
+  001_segment_event_embeddings.sql - Database migration for event embeddings
 ```
 
 ## Commands
 
-- `npm run embed` - Generate embeddings for edition
+- `npm run embed` - Generate summary/entities embeddings
+- `npm run embed-events` - Generate per-event embeddings
 - `npm run match` - Independent segment matching
-- `npm run match-align` - Monotonic alignment matching (production)
+- `npm run match-align` - Monotonic alignment matching (summary/entities)
+- `npm run match-events` - Event voting matching
 - `npm run derive` - Derive cross-media mappings via pivot
 
 ## Environment Variables
@@ -49,9 +55,11 @@ Optional:
 
 Uses Supabase Postgres with pgvector extension:
 - segments, segment_summaries, segment_entities
-- segment_embeddings (writes)
-- segment_mappings (writes)
+- segment_embeddings (writes summary/entities embeddings)
+- segment_event_embeddings (writes per-event embeddings)
+- segment_mappings (writes matching results)
 
 ## Recent Changes
 
+- January 2026: Added per-event embeddings (embed-events) and event voting matching (match-events)
 - January 2026: Initial implementation with embed, match, match-align, derive commands
