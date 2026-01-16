@@ -182,6 +182,7 @@ async function deriveMapping(
 
   await upsertDerivedMapping(
     animeMapping.from_segment_id,
+    animeMapping.from_segment_number,
     toEditionId,
     toSegmentStart,
     toSegmentEnd,
@@ -194,6 +195,7 @@ async function deriveMapping(
 
 async function upsertDerivedMapping(
   fromSegmentId: string,
+  segmentNumber: number,
   toEditionId: string,
   toSegmentStart: number,
   toSegmentEnd: number,
@@ -202,11 +204,12 @@ async function upsertDerivedMapping(
 ): Promise<void> {
   const sql = `
     INSERT INTO segment_mappings (
-      from_segment_id, to_edition_id, to_segment_start, to_segment_end,
+      from_segment_id, segment_number, to_edition_id, to_segment_start, to_segment_end,
       confidence, evidence, status, algorithm_version
     )
-    VALUES ($1, $2, $3, $4, $5, $6, 'proposed', 'derived-v1')
+    VALUES ($1, $2, $3, $4, $5, $6, $7, 'proposed', 'derived-v1')
     ON CONFLICT (from_segment_id, to_edition_id) DO UPDATE SET
+      segment_number = EXCLUDED.segment_number,
       to_segment_start = EXCLUDED.to_segment_start,
       to_segment_end = EXCLUDED.to_segment_end,
       confidence = EXCLUDED.confidence,
@@ -218,6 +221,7 @@ async function upsertDerivedMapping(
 
   await query(sql, [
     fromSegmentId,
+    segmentNumber,
     toEditionId,
     toSegmentStart,
     toSegmentEnd,

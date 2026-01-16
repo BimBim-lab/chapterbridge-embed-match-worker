@@ -4,6 +4,7 @@ import { runEmbedEvents } from './eventEmbed.js';
 import { runMatch } from './match.js';
 import { runMatchAlign } from './align.js';
 import { runMatchEvents } from './eventMatch.js';
+import { runMatchEventsGreedy } from './eventMatchGreedy.js';
 import { runDerive } from './derive.js';
 import { closePool } from './db.js';
 
@@ -25,12 +26,13 @@ function printUsage(): void {
 ChapterBridge Embed/Match Worker
 
 Commands:
-  embed         Generate summary/entities embeddings for segments
-  embed-events  Generate per-event embeddings for segments
-  match         Match segments between editions (independent)
-  match-align   Match segments with monotonic alignment (summary/entities)
-  match-events  Match segments using event voting algorithm
-  derive        Derive cross-media mappings via pivot edition
+  embed              Generate summary/entities embeddings for segments
+  embed-events       Generate per-event embeddings for segments
+  match              Match segments between editions (independent)
+  match-align        Match segments with monotonic alignment (summary/entities)
+  match-events       Match segments using event voting algorithm
+  match-events-greedy  Match segments using greedy monotonic event-to-event
+  derive             Derive cross-media mappings via pivot edition
 
 Usage:
   npm run embed -- --editionId=<uuid> [--limit=5000]
@@ -38,6 +40,7 @@ Usage:
   npm run match -- --fromEditionId=<uuid> --toEditionId=<uuid> [--limit=2000]
   npm run match-align -- --fromEditionId=<uuid> --toEditionId=<uuid> [--window=80] [--backtrack=3] [--limit=999999]
   npm run match-events -- --fromEditionId=<uuid> --toEditionId=<uuid> [--window=80] [--backtrack=3] [--limit=999999]
+  npm run match-events-greedy -- --fromEditionId=<uuid> --toEditionId=<uuid> [--limit=999999]
   npm run derive -- --fromEditionId=<uuid> --toEditionId=<uuid> --pivotEditionId=<uuid> [--limit=999999]
 `);
 }
@@ -118,6 +121,19 @@ async function main(): Promise<void> {
         const backtrack = parseInt(params.backtrack || String(config.backtrack), 10);
         const limit = parseInt(params.limit || '999999', 10);
         await runMatchEvents(fromEditionId, toEditionId, windowSize, backtrack, limit);
+        break;
+      }
+
+      case 'match-events-greedy': {
+        validateConfig(['supabaseDbUrl']);
+        const fromEditionId = params.fromEditionId;
+        const toEditionId = params.toEditionId;
+        if (!fromEditionId || !toEditionId) {
+          console.error('Error: --fromEditionId and --toEditionId are required');
+          process.exit(1);
+        }
+        const limit = parseInt(params.limit || '999999', 10);
+        await runMatchEventsGreedy(fromEditionId, toEditionId, limit);
         break;
       }
 

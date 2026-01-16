@@ -153,6 +153,7 @@ export async function matchSegment(
 
   await upsertMapping(
     fromSeg.segment_id,
+    fromSeg.segment_number,
     toEditionId,
     toSegmentStart,
     toSegmentEnd,
@@ -302,6 +303,7 @@ async function fetchCandidates(
 
 async function upsertMapping(
   fromSegmentId: string,
+  segmentNumber: number,
   toEditionId: string,
   toSegmentStart: number,
   toSegmentEnd: number,
@@ -311,11 +313,12 @@ async function upsertMapping(
 ): Promise<void> {
   const sql = `
     INSERT INTO segment_mappings (
-      from_segment_id, to_edition_id, to_segment_start, to_segment_end,
+      from_segment_id, segment_number, to_edition_id, to_segment_start, to_segment_end,
       confidence, evidence, status, algorithm_version
     )
-    VALUES ($1, $2, $3, $4, $5, $6, 'proposed', $7)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, 'proposed', $8)
     ON CONFLICT (from_segment_id, to_edition_id) DO UPDATE SET
+      segment_number = EXCLUDED.segment_number,
       to_segment_start = EXCLUDED.to_segment_start,
       to_segment_end = EXCLUDED.to_segment_end,
       confidence = EXCLUDED.confidence,
@@ -327,6 +330,7 @@ async function upsertMapping(
 
   await query(sql, [
     fromSegmentId,
+    segmentNumber,
     toEditionId,
     toSegmentStart,
     toSegmentEnd,

@@ -1,6 +1,13 @@
 import { query } from './db.js';
 import { config } from './config.js';
 
+// Enhanced constraints for better matching
+const MAX_RANGE_WIDTH = 15;        // Maximum range width (end - start + 1)
+const MAX_FORWARD_JUMP = 30;       // Maximum forward jump allowed
+const CLUSTER_THRESHOLD = 0.01;    // Tighter clustering (was 0.02)
+const JUMP_PENALTY_PER_10 = 0.1;   // Penalty per 10 chapters over MAX_FORWARD_JUMP
+const MIN_CONFIDENCE = 0.4;        // Minimum confidence to accept mapping
+
 interface FromSegmentEvents {
   segment_id: string;
   segment_number: number;
@@ -160,37 +167,116 @@ async function matchSegmentByEvents(
   segmentVotes.sort((a, b) => b.avg_similarity - a.avg_similarity);
 
   const top = segmentVotes[0];
-  const threshold = top.avg_similarity - 0.02;
-  const inRange = segmentVotes.filter((v) => v.avg_similarity >= threshold);
+  let baseConfidence = top.avg_similarity;
+  
+  // Apply tighter clustering threshold
+  const threshold = top.avg_similarity - CLUSTER_THRESHOLD;
+  let inRange = segmentVotes.filter((v) => v.avg_similarity >= threshold);
 
-  const numbers = inRange.map((v) => v.segment_number);
-  const toSegmentStart = Math.min(...numbers);
-  const toSegmentEnd = Math.max(...numbers);
-  const confidence = top.avg_similarity;
+  // Form contiguous cluster around the best match
+  const bestSegNum = top.segment_number;
+  const sorted = inRange.map(v => v.segment_number).sort((a, b) => a - b);
+  
+  // Find contiguous cluster containing the best match
+  let clusterStart = bestSegNum;
+  let clusterEnd = bestSegNum;
+  
+  for (const num of sorted) {
+    if (num >= clusterStart - 2 && num <= clusterEnd + 2) {
+      clusterStart = Math.min(clusterStart, num);
+      clusterEnd = Math.max(clusterEnd, num);
+    }
+  }
+  
+  const toSegmentStart = clusterStart;
+  const toSegmentEnd = clusterEnd;
+  const rangeWidth = toSegmentEnd - toSegmentStart + 1;
+
+  // Apply range cap
+  if (rangeWidth > MAX_RANGE_WIDTH) {
+    console.warn(`  Segment ${fromSeg.segment_number}: Range too wide (${rangeWidth}), capping to ${MAX_RANGE_WIDTH}`);
+    const midpoint = Math.floor((toSegmentStart + toSegmentEnd) / 2);
+    const half = Math.floor(MAX_RANGE_WIDTH / 2);
+    const cappedStart = midpoint - half;
+    const cappedEnd = cappedStart + MAX_RANGE_WIDTH - 1;
+    
+    // Update to capped range
+    inRange = inRange.filter(v => v.segment_number >= cappedStart && v.segment_number <= cappedEnd);
+  }
+
+  // Apply forward jump penalty
+  if (lastBestToNumber !== null) {
+    const forwardJump = toSegmentStart - lastBestToNumber;
+    
+    if (forwardJump > MAX_FORWARD_JUMP) {
+      const excessJump = forwardJump - MAX_FORWARD_JUMP;
+      const penalty = (excessJump / 10) * JUMP_PENALTY_PER_10;
+      baseConfidence -= penalty;
+      console.warn(`  Segment ${fromSeg.segment_number}: Large jump ${forwardJump}, applying penalty -${penalty.toFixed(3)}`);
+    }
+    
+    // Reject if jump is too extreme (>2x MAX_FORWARD_JUMP)
+    if (forwardJump > MAX_FORWARD_JUMP * 2) {
+      console.warn(`  Segment ${fromSeg.segment_number}: Jump ${forwardJump} exceeds 2x limit, rejecting`);
+      return null;
+    }
+  }
+
+  const confidence = Math.max(0, Math.min(1, baseConfidence));
+
+  // Reject low confidence matches
+  if (confidence < MIN_CONFIDENCE) {
+    console.warn(`  Segment ${fromSeg.segment_number}: Confidence ${confidence.toFixed(3)} below threshold ${MIN_CONFIDENCE}, rejecting`);
+    return null;
+  }
+
+  // Recalculate final range after all filters
+  const finalNumbers = inRange.map((v) => v.segment_number);
+  const finalStart = Math.min(...finalNumbers);
+  const finalEnd = Math.max(...finalNumbers);
+  const finalWidth = finalEnd - finalStart + 1;
 
   const evidence = {
-    algorithm: 'event-voting',
+    algorithm: 'event-voting-v2',
     from_event_count: fromSeg.event_embeddings.length,
+    vote_histogram: Object.fromEntries(
+      segmentVotes.slice(0, 10).map(v => [v.segment_number, v.vote_count])
+    ),
     top_candidates: segmentVotes.slice(0, 5).map((v) => ({
       segment_number: v.segment_number,
       avg_similarity: v.avg_similarity,
       vote_count: v.vote_count,
     })),
+    cluster_info: {
+      best_segment: bestSegNum,
+      cluster_start: clusterStart,
+      cluster_end: clusterEnd,
+      cluster_width: rangeWidth,
+      final_width: finalWidth,
+      threshold_used: CLUSTER_THRESHOLD,
+    },
     alignment: {
       last_best_to_number: lastBestToNumber,
       window_min: minNumber,
       window_max: maxNumber,
+      forward_jump: lastBestToNumber !== null ? finalStart - lastBestToNumber : null,
+    },
+    score_details: {
+      base_confidence: top.avg_similarity,
+      final_confidence: confidence,
+      penalties_applied: top.avg_similarity - confidence,
     },
   };
 
   await upsertMapping(
     fromSeg.segment_id,
+    fromSeg.segment_number,
     toEditionId,
-    toSegmentStart,
-    toSegmentEnd,
+    finalStart,
+    finalEnd,
     confidence,
     evidence,
-    'event-v1'
+    'event-v2'
   );
 
   return { toSegmentStart, toSegmentEnd, confidence };
@@ -235,6 +321,7 @@ async function searchEventCandidates(
 
 async function upsertMapping(
   fromSegmentId: string,
+  segmentNumber: number,
   toEditionId: string,
   toSegmentStart: number,
   toSegmentEnd: number,
@@ -244,11 +331,12 @@ async function upsertMapping(
 ): Promise<void> {
   const sql = `
     INSERT INTO segment_mappings (
-      from_segment_id, to_edition_id, to_segment_start, to_segment_end,
+      from_segment_id, segment_number, to_edition_id, to_segment_start, to_segment_end,
       confidence, evidence, status, algorithm_version
     )
-    VALUES ($1, $2, $3, $4, $5, $6, 'proposed', $7)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, 'proposed', $8)
     ON CONFLICT (from_segment_id, to_edition_id) DO UPDATE SET
+      segment_number = EXCLUDED.segment_number,
       to_segment_start = EXCLUDED.to_segment_start,
       to_segment_end = EXCLUDED.to_segment_end,
       confidence = EXCLUDED.confidence,
@@ -260,6 +348,7 @@ async function upsertMapping(
 
   await query(sql, [
     fromSegmentId,
+    segmentNumber,
     toEditionId,
     toSegmentStart,
     toSegmentEnd,
