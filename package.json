@@ -1,15 +1,12 @@
 {
   "name": "chapterbridge-embed-match-worker",
-  "version": "1.0.0",
-  "description": "Worker for embedding generation, segment matching, and cross-media derivation",
+  "version": "2.0.0",
+  "description": "Worker for LLM-based segment matching and cross-media derivation (events-only)",
   "type": "module",
   "scripts": {
     "dev": "tsx src/cli.ts",
-    "embed": "tsx src/cli.ts embed",
-    "embed-events": "tsx src/cli.ts embed-events",
-    "match": "tsx src/cli.ts match",
-    "match-align": "tsx src/cli.ts match-align",
-    "match-events": "tsx src/cli.ts match-events",
+    "match-all": "tsx src/cli.ts match-all",
+    "match-new": "tsx src/cli.ts match-new",
     "derive": "tsx src/cli.ts derive",
     "build": "tsc",
     "typecheck": "tsc --noEmit"
@@ -18,7 +15,8 @@
     "@supabase/supabase-js": "^2.90.1",
     "dotenv": "^16.6.1",
     "openai": "^4.104.0",
-    "pg": "^8.17.1"
+    "pg": "^8.17.1",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/node": "^20.19.29",

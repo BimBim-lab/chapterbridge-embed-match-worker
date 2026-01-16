@@ -215,13 +215,14 @@ CREATE INDEX idx_segemb_entities_ivfflat ON segment_embeddings
 CREATE TABLE segment_mappings (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   from_segment_id UUID NOT NULL REFERENCES segments(id) ON DELETE CASCADE,
+  from_edition_id UUID NOT NULL REFERENCES editions(id) ON DELETE CASCADE,
   segment_number INTEGER NOT NULL,
   to_edition_id UUID NOT NULL REFERENCES editions(id) ON DELETE CASCADE,
   to_segment_start INTEGER NOT NULL,
   to_segment_end INTEGER NOT NULL,
   confidence REAL NOT NULL DEFAULT 0,
   evidence JSONB NOT NULL DEFAULT '{}',
-  status TEXT NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed', 'likely', 'verified', 'disputed')),
+  status TEXT NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed', 'approved')),
   algorithm_version TEXT,
   created_by UUID REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -232,6 +233,10 @@ CREATE TABLE segment_mappings (
 CREATE INDEX idx_segment_mappings_from ON segment_mappings(from_segment_id);
 CREATE INDEX idx_segment_mappings_to_edition ON segment_mappings(to_edition_id);
 CREATE INDEX idx_segment_mappings_status ON segment_mappings(status);
+CREATE INDEX idx_segment_mappings_from_edition_to_edition ON segment_mappings(from_edition_id, to_edition_id);
+CREATE INDEX idx_segment_mappings_from_edition_number ON segment_mappings(from_edition_id, segment_number DESC);
+
+COMMENT ON COLUMN segment_mappings.from_edition_id IS 'Edition ID of the source segment (denormalized from segments table for query performance)';
 
 -- ============================================
 -- TRIGGERS (auto-update updated_at)

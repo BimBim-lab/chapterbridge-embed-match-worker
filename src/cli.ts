@@ -1,11 +1,7 @@
 import { validateConfig, config } from './config.js';
-import { runEmbed } from './embed.js';
-import { runEmbedEvents } from './eventEmbed.js';
-import { runMatch } from './match.js';
-import { runMatchAlign } from './align.js';
-import { runMatchEvents } from './eventMatch.js';
-import { runMatchEventsGreedy } from './eventMatchGreedy.js';
-import { runDerive } from './derive.js';
+import { runMatchAll } from './matchingAll.js';
+import { runMatchIncremental } from './matchingIncremental.js';
+import { runDeriveAnimeManhwa } from './deriveAnimeManhwa.js';
 import { closePool } from './db.js';
 
 function parseArgs(args: string[]): Record<string, string> {
@@ -25,14 +21,26 @@ function printUsage(): void {
   console.log(`
 ChapterBridge Embed/Match Worker
 
-Commands:
+=== LLM-BASED MATCHING (EVENTS-ONLY, RECOMMENDED) ===
+
+  match-all          Full alignment using GPT-4.1 LLM with events
+  match-new          Incremental matching for new episodes/chapters
+  derive-llm         Derive anime->manhwa mappings via novel pivot
+
+Usage:
+  npm run match-all -- --fromEditionId=<uuid> --toNovelEditionId=<uuid> --fromStart=<int> --fromEnd=<int> --novelStart=<int> --novelEnd=<int>
+  npm run match-new -- --fromEditionId=<uuid> --toNovelEditionId=<uuid> --fromNumber=<int>
+  npm run derive -- --animeEditionId=<uuid> --manhwaEditionId=<uuid> --novelEditionId=<uuid>
+
+=== LEGACY EMBEDDING-BASED COMMANDS ===
+
   embed              Generate summary/entities embeddings for segments
   embed-events       Generate per-event embeddings for segments
   match              Match segments between editions (independent)
   match-align        Match segments with monotonic alignment (summary/entities)
   match-events       Match segments using event voting algorithm
   match-events-greedy  Match segments using greedy monotonic event-to-event
-  derive             Derive cross-media mappings via pivot edition
+  derive-legacy      Derive cross-media mappings via pivot edition (legacy)
 
 Usage:
   npm run embed -- --editionId=<uuid> [--limit=5000]
@@ -41,7 +49,7 @@ Usage:
   npm run match-align -- --fromEditionId=<uuid> --toEditionId=<uuid> [--window=80] [--backtrack=3] [--limit=999999]
   npm run match-events -- --fromEditionId=<uuid> --toEditionId=<uuid> [--window=80] [--backtrack=3] [--limit=999999]
   npm run match-events-greedy -- --fromEditionId=<uuid> --toEditionId=<uuid> [--limit=999999]
-  npm run derive -- --fromEditionId=<uuid> --toEditionId=<uuid> --pivotEditionId=<uuid> [--limit=999999]
+  npm run derive-legacy -- --fromEditionId=<uuid> --toEditionId=<uuid> --pivotEditionId=<uuid> [--limit=999999]
 `);
 }
 
@@ -57,99 +65,69 @@ async function main(): Promise<void> {
 
   try {
     switch (command) {
-      case 'embed': {
-        validateConfig(['supabaseDbUrl', 'openaiApiKey']);
-        const editionId = params.editionId;
-        if (!editionId) {
-          console.error('Error: --editionId is required');
-          process.exit(1);
-        }
-        const limit = parseInt(params.limit || '5000', 10);
-        await runEmbed(editionId, limit);
-        break;
-      }
-
-      case 'embed-events': {
-        validateConfig(['supabaseDbUrl', 'openaiApiKey']);
-        const editionId = params.editionId;
-        if (!editionId) {
-          console.error('Error: --editionId is required');
-          process.exit(1);
-        }
-        const limit = parseInt(params.limit || '5000', 10);
-        await runEmbedEvents(editionId, limit);
-        break;
-      }
-
-      case 'match': {
-        validateConfig(['supabaseDbUrl']);
-        const fromEditionId = params.fromEditionId;
-        const toEditionId = params.toEditionId;
-        if (!fromEditionId || !toEditionId) {
-          console.error('Error: --fromEditionId and --toEditionId are required');
-          process.exit(1);
-        }
-        const limit = parseInt(params.limit || '2000', 10);
-        await runMatch(fromEditionId, toEditionId, limit);
-        break;
-      }
-
-      case 'match-align': {
-        validateConfig(['supabaseDbUrl']);
-        const fromEditionId = params.fromEditionId;
-        const toEditionId = params.toEditionId;
-        if (!fromEditionId || !toEditionId) {
-          console.error('Error: --fromEditionId and --toEditionId are required');
-          process.exit(1);
-        }
-        const windowSize = parseInt(params.window || String(config.window), 10);
-        const backtrack = parseInt(params.backtrack || String(config.backtrack), 10);
-        const limit = parseInt(params.limit || '999999', 10);
-        await runMatchAlign(fromEditionId, toEditionId, windowSize, backtrack, limit);
-        break;
-      }
-
-      case 'match-events': {
-        validateConfig(['supabaseDbUrl']);
-        const fromEditionId = params.fromEditionId;
-        const toEditionId = params.toEditionId;
-        if (!fromEditionId || !toEditionId) {
-          console.error('Error: --fromEditionId and --toEditionId are required');
-          process.exit(1);
-        }
-        const windowSize = parseInt(params.window || String(config.window), 10);
-        const backtrack = parseInt(params.backtrack || String(config.backtrack), 10);
-        const limit = parseInt(params.limit || '999999', 10);
-        await runMatchEvents(fromEditionId, toEditionId, windowSize, backtrack, limit);
-        break;
-      }
-
-      case 'match-events-greedy': {
-        validateConfig(['supabaseDbUrl']);
-        const fromEditionId = params.fromEditionId;
-        const toEditionId = params.toEditionId;
-        if (!fromEditionId || !toEditionId) {
-          console.error('Error: --fromEditionId and --toEditionId are required');
-          process.exit(1);
-        }
-        const limit = parseInt(params.limit || '999999', 10);
-        await runMatchEventsGreedy(fromEditionId, toEditionId, limit);
-        break;
-      }
-
       case 'derive': {
+        // New LLM-based derive (anime->manhwa via novel)
         validateConfig(['supabaseDbUrl']);
-        const fromEditionId = params.fromEditionId;
-        const toEditionId = params.toEditionId;
-        const pivotEditionId = params.pivotEditionId;
-        if (!fromEditionId || !toEditionId || !pivotEditionId) {
+        const animeEditionId = params.animeEditionId;
+        const manhwaEditionId = params.manhwaEditionId;
+        const novelEditionId = params.novelEditionId;
+        if (!animeEditionId || !manhwaEditionId || !novelEditionId) {
           console.error(
-            'Error: --fromEditionId, --toEditionId, and --pivotEditionId are required'
+            'Error: --animeEditionId, --manhwaEditionId, and --novelEditionId are required'
           );
           process.exit(1);
         }
-        const limit = parseInt(params.limit || '999999', 10);
-        await runDerive(fromEditionId, toEditionId, pivotEditionId, limit);
+        await runDeriveAnimeManhwa({
+          animeEditionId,
+          manhwaEditionId,
+          novelEditionId,
+        });
+        break;
+      }
+
+      case 'match-all': {
+        // LLM-based full alignment
+        validateConfig(['supabaseDbUrl', 'openaiApiKey']);
+        const fromEditionId = params.fromEditionId;
+        const toNovelEditionId = params.toNovelEditionId;
+        const fromStart = params.fromStart;
+        const fromEnd = params.fromEnd;
+        const novelStart = params.novelStart;
+        const novelEnd = params.novelEnd;
+        if (!fromEditionId || !toNovelEditionId || !fromStart || !fromEnd || !novelStart || !novelEnd) {
+          console.error(
+            'Error: --fromEditionId, --toNovelEditionId, --fromStart, --fromEnd, --novelStart, --novelEnd are required'
+          );
+          process.exit(1);
+        }
+        await runMatchAll({
+          fromEditionId,
+          toNovelEditionId,
+          fromStart: parseInt(fromStart, 10),
+          fromEnd: parseInt(fromEnd, 10),
+          novelStart: parseInt(novelStart, 10),
+          novelEnd: parseInt(novelEnd, 10),
+        });
+        break;
+      }
+
+      case 'match-new': {
+        // LLM-based incremental matching
+        validateConfig(['supabaseDbUrl', 'openaiApiKey']);
+        const fromEditionId = params.fromEditionId;
+        const toNovelEditionId = params.toNovelEditionId;
+        const fromNumber = params.fromNumber;
+        if (!fromEditionId || !toNovelEditionId || !fromNumber) {
+          console.error(
+            'Error: --fromEditionId, --toNovelEditionId, and --fromNumber are required'
+          );
+          process.exit(1);
+        }
+        await runMatchIncremental({
+          fromEditionId,
+          toNovelEditionId,
+          fromNumber: parseInt(fromNumber, 10),
+        });
         break;
       }
 
