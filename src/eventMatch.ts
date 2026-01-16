@@ -218,8 +218,11 @@ async function searchEventCandidates(
     LIMIT $3
   `;
 
+  const embeddingStr = Array.isArray(embedding) 
+    ? `[${embedding.join(',')}]`
+    : embedding;
   const rows = await query<any>(sql, [
-    `[${embedding.join(',')}]`,
+    embeddingStr,
     toEditionId,
     topK,
   ]);
